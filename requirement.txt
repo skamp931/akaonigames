@@ -1,2 +1,3 @@
 streamlit
 numpy
+oauth2client
