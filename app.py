@@ -3,6 +3,9 @@ import numpy as np
 import random
 import time
 from collections import deque
+import gspread
+import pandas as pd
+from google.oauth2.service_account import Credentials
 
 # --- ゲームの設定 ---
 MAP_WIDTH = 18
@@ -15,9 +18,50 @@ KEY = "🔑"
 EXIT_LOCKED = "🚪"
 EXIT_UNLOCKED = "🟩"
 OBSTACLE = "🌲"
-TRAP = "🪤"  # 罠のアイコン
+TRAP = "🪤"
 INITIAL_PLAYER_POS = [1, 1]
 EXIT_POS = [MAP_WIDTH - 2, 1] # [16, 1]
+
+# --- Google Sheets 連携 ---
+def get_gspread_client():
+    """StreamlitのSecretから認証情報を取得し、gspreadクライアントを返す"""
+    try:
+        scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=scopes)
+        client = gspread.authorize(creds)
+        return client
+    except Exception:
+        # Secretが設定されていない場合はNoneを返す
+        return None
+
+def get_ranking(client):
+    """スプレッドシートからランキングデータを取得・表示"""
+    try:
+        spreadsheet_name = st.secrets.spreadsheet_name
+        sheet = client.open(spreadsheet_name).sheet1
+        records = sheet.get_all_records()
+        if not records:
+            return pd.DataFrame(columns=['Name', 'Difficulty', 'ClearCount'])
+            
+        df = pd.DataFrame(records)
+        df['ClearCount'] = pd.to_numeric(df['ClearCount'])
+        top_scores = df.loc[df.groupby('Name')['ClearCount'].idxmax()]
+        ranking = top_scores.sort_values(by='ClearCount', ascending=False).head(5)
+        return ranking[['Name', 'Difficulty', 'ClearCount']]
+    except Exception as e:
+        st.sidebar.warning(f"ランキング取得エラー: {e}")
+        return pd.DataFrame()
+
+def save_score(client, name, difficulty, clear_count):
+    """スコアをスプレッドシートに保存"""
+    try:
+        spreadsheet_name = st.secrets.spreadsheet_name
+        sheet = client.open(spreadsheet_name).sheet1
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        sheet.append_row([name, difficulty, clear_count, timestamp])
+    except Exception as e:
+        st.sidebar.warning(f"スコア保存エラー: {e}")
+
 
 def is_path_possible(game_map, start_pos, end_pos):
     """BFS (幅優先探索) を使って、スタートからゴールまでの道があるかチェック"""
@@ -89,7 +133,8 @@ def initialize_game():
     if 'game_started' not in st.session_state:
         if 'clear_count' not in st.session_state: st.session_state.clear_count = 0
         if 'difficulty' not in st.session_state: st.session_state.difficulty = "ふつう"
-        
+        if 'player_name' not in st.session_state: st.session_state.player_name = "名無し"
+
         game_map, key_pos = generate_map(st.session_state.clear_count)
         st.session_state.game_map = game_map
         st.session_state.key_pos = key_pos
@@ -107,7 +152,7 @@ def initialize_game():
         st.session_state.game_started = True
         st.session_state.start_time = time.time()
         st.session_state.end_time = None
-        st.session_state.oni_last_move_time = time.time() # 鬼の最終移動時刻
+        st.session_state.oni_last_move_time = time.time()
         
         st.session_state.player_trap_pos = None
         st.session_state.map_trap_pos = None
@@ -123,11 +168,9 @@ def initialize_game():
         else: st.session_state.trap_count = 0
 
 def display_map():
-    """現在のゲームマップを表示する"""
     display_map_data = [row[:] for row in st.session_state.game_map]
     px, py = st.session_state.player_pos
     ox, oy = st.session_state.oni_pos
-    
     if st.session_state.player_trap_pos:
         tx, ty = st.session_state.player_trap_pos
         if [tx, ty] != [px, py] and [tx, ty] != [ox, oy]: display_map_data[ty][tx] = TRAP
@@ -146,7 +189,6 @@ def display_map():
     st.code(map_str, language=None)
 
 def move_player(dx, dy):
-    """プレイヤーを1マス移動させる。鬼は動かさない。"""
     if st.session_state.game_over or st.session_state.win: return
     px, py = st.session_state.player_pos
     new_px, new_py = px + dx, py + dy
@@ -156,7 +198,6 @@ def move_player(dx, dy):
         check_events()
 
 def handle_bulk_move(commands):
-    """テキストコマンドに基づいてプレイヤーを連続で移動させる"""
     for command in commands.lower():
         if st.session_state.game_over or st.session_state.win: break
         dx, dy = 0, 0
@@ -165,18 +206,16 @@ def handle_bulk_move(commands):
         elif command == 'u': dy = -1
         elif command == 'd': dy = 1
         else: continue
-        
         px, py = st.session_state.player_pos
         new_px, new_py = px + dx, py + dy
         if st.session_state.game_map[new_py][new_px] not in [WALL, OBSTACLE]:
             st.session_state.player_pos = [new_px, new_py]
-            check_events() # 鬼は動かさずにイベントチェックのみ
+            check_events()
         else:
             st.session_state.message = "一括移動中に壁にぶつかり停止しました。"
             break
             
 def _move_oni_one_step():
-    """鬼をプレイヤーに向かって1マス動かす内部ロジック"""
     px, py = st.session_state.player_pos
     ox, oy = st.session_state.oni_pos
     new_ox, new_oy = ox, oy
@@ -195,7 +234,6 @@ def _move_oni_one_step():
     st.session_state.oni_pos = [new_ox, new_oy]
 
 def check_oni_trap_interaction():
-    """鬼が罠を踏んだかチェックし、踏んでいたら停止させる"""
     oni_pos = st.session_state.oni_pos
     trapped = False
     if st.session_state.player_trap_pos and oni_pos == st.session_state.player_trap_pos:
@@ -207,65 +245,55 @@ def check_oni_trap_interaction():
         st.session_state.message = f"鬼が罠にかかった！ {st.session_state.oni_stopped_turns}ターン動けない。"
 
 def move_oni():
-    """難易度に応じて鬼の状態を更新する"""
     if st.session_state.oni_stopped_turns > 0:
         st.session_state.oni_stopped_turns -= 1
         if st.session_state.oni_stopped_turns > 0:
             st.session_state.message = f"鬼は罠にはまっている！あと{st.session_state.oni_stopped_turns}ターンは動けない。"
         else: st.session_state.message = "鬼が罠から抜け出した！"
         return
-
     difficulty = st.session_state.difficulty
-    # リアルタイム制ではターン数は無視
-    if difficulty == "やさしい":
-        _move_oni_one_step(); check_oni_trap_interaction()
-    elif difficulty == "ふつう":
-        _move_oni_one_step(); check_oni_trap_interaction()
+    if difficulty == "やさしい" or difficulty == "ふつう":
+        _move_oni_one_step()
     elif difficulty == "むずかしい":
         _move_oni_one_step()
         if st.session_state.player_pos == st.session_state.oni_pos: check_events(); return
-        check_oni_trap_interaction()
-        if st.session_state.oni_stopped_turns > 0: return
         _move_oni_one_step()
-        check_oni_trap_interaction()
+    check_oni_trap_interaction()
 
 def check_events():
-    """ゲーム内のイベント（捕獲、鍵取得、脱出）を確認する"""
     if st.session_state.player_pos == st.session_state.oni_pos:
         st.session_state.game_over = True
         st.session_state.message = "鬼に捕まってしまった...。"
         if not st.session_state.end_time: st.session_state.end_time = time.time()
         return
-
     if st.session_state.key_pos and st.session_state.player_pos == st.session_state.key_pos:
         st.session_state.has_key = True; st.session_state.key_pos = None
         st.session_state.message = "鍵を手に入れた！出口を探そう。"
         return
-
     if st.session_state.player_pos == st.session_state.exit_pos:
         if st.session_state.has_key:
             st.session_state.win = True
             st.session_state.message = "脱出に成功した！おめでとう！"
             if not st.session_state.win_counted:
-                st.session_state.clear_count += 1; st.session_state.win_counted = True
+                st.session_state.clear_count += 1
+                st.session_state.win_counted = True
+                client = get_gspread_client()
+                if client:
+                    save_score(client, st.session_state.player_name, st.session_state.difficulty, st.session_state.clear_count)
             if not st.session_state.end_time: st.session_state.end_time = time.time()
         else: st.session_state.message = "鍵がかかっている...。鍵を探さなければ。"
 
 def automatic_oni_move():
-    """一定時間ごとに鬼を動かすリアルタイム処理"""
     if st.session_state.game_over or st.session_state.win: return
-    
     interval = 1.0
     if st.session_state.difficulty == 'やさしい': interval = 1.5
     elif st.session_state.difficulty == 'むずかしい': interval = 0.8
-        
     if time.time() - st.session_state.oni_last_move_time > interval:
         move_oni()
         check_events()
         st.session_state.oni_last_move_time = time.time()
 
 def force_game_reset():
-    """難易度変更やリスタート時にゲーム状態を強制的にリセットする"""
     st.session_state.pop('game_started', None)
     
 def restart_game():
@@ -278,7 +306,18 @@ automatic_oni_move()
 
 # --- サイドバー (設定と情報) ---
 with st.sidebar:
-    st.title("設定と情報")
+    st.subheader("ランキング")
+    gspread_client = get_gspread_client()
+    if gspread_client:
+        ranking_df = get_ranking(gspread_client)
+        st.dataframe(ranking_df, hide_index=True)
+    else:
+        st.info("ランキング機能を利用するには、secrets.tomlの設定が必要です。")
+
+    st.subheader("今回の名前")
+    st.text_input("名前", key="player_name", label_visibility="collapsed")
+    st.write("---")
+    
     if 'start_time' in st.session_state:
         elapsed_time = (st.session_state.end_time or time.time()) - st.session_state.start_time
         minutes, seconds = int(elapsed_time // 60), int(elapsed_time % 60)
@@ -353,5 +392,5 @@ if st.button("リスタート", use_container_width=True): restart_game()
 
 # --- リアルタイム更新 ---
 if not st.session_state.game_over and not st.session_state.win:
-    time.sleep(0.1) # CPU負荷を少し下げる
+    time.sleep(0.1)
     st.rerun()
