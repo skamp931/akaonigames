@@ -61,6 +61,7 @@ def save_score(client, name, difficulty, clear_count):
         sheet.append_row([name, difficulty, clear_count, timestamp])
         # スコア保存後にキャッシュをクリア
         st.cache_data.clear()
+        st.toast("記録を保存しました！")
     except Exception as e:
         st.sidebar.warning(f"スコア保存エラー: {e}")
 
@@ -135,7 +136,13 @@ def initialize_game():
     if 'game_started' not in st.session_state:
         if 'clear_count' not in st.session_state: st.session_state.clear_count = 0
         if 'difficulty' not in st.session_state: st.session_state.difficulty = "ふつう"
-        if 'player_name' not in st.session_state: st.session_state.player_name = "名無し"
+        if 'player_name' not in st.session_state:
+            # ランダムな名前を生成
+            adjectives = ["勇敢な", "素早い", "賢い", "幸運の", "伝説の"]
+            nouns = ["挑戦者", "冒険家", "探検家", "勇者", "脱出者"]
+            today_str = time.strftime("%m%d")
+            random_name = f"{random.choice(adjectives)}{random.choice(nouns)}_{today_str}"
+            st.session_state.player_name = random_name
 
         game_map, key_pos = generate_map(st.session_state.clear_count)
         st.session_state.game_map = game_map
@@ -299,7 +306,21 @@ def force_game_reset():
     st.session_state.pop('game_started', None)
     
 def restart_game():
-    force_game_reset(); st.rerun()
+    """リスタート時に現在のスコアを保存し、ゲームをリセット"""
+    # スコアが1以上なら保存
+    if st.session_state.get('clear_count', 0) > 0:
+        client = get_gspread_client()
+        if client:
+            save_score(
+                client, 
+                st.session_state.player_name, 
+                st.session_state.difficulty, 
+                st.session_state.clear_count
+            )
+    
+    # ゲームをリセット
+    force_game_reset()
+    st.rerun()
 
 # --- メインのUI ---
 st.set_page_config(page_title="Streamlit 青鬼")
