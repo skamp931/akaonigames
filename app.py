@@ -107,7 +107,7 @@ def initialize_game():
         st.session_state.game_started = True
         st.session_state.start_time = time.time()
         st.session_state.end_time = None
-        st.session_state.last_update = time.time() # リアルタイム更新用のタイムスタンプ
+        st.session_state.oni_last_move_time = time.time() # 鬼の最終移動時刻
         
         st.session_state.player_trap_pos = None
         st.session_state.map_trap_pos = None
@@ -153,10 +153,7 @@ def move_player(dx, dy):
     if st.session_state.game_map[new_py][new_px] not in [WALL, OBSTACLE]:
         st.session_state.player_pos = [new_px, new_py]
         st.session_state.message = ""
-        st.session_state.turn_count += 1
-        # move_oni() # REMOVED: 鬼は自動タイマーでのみ動く
         check_events()
-        st.session_state.last_update = time.time() # プレイヤーが動いたので自動移動タイマーをリセット
 
 def handle_bulk_move(commands):
     """テキストコマンドに基づいてプレイヤーを連続で移動させる"""
@@ -178,8 +175,6 @@ def handle_bulk_move(commands):
             st.session_state.message = "一括移動中に壁にぶつかり停止しました。"
             break
             
-    st.session_state.last_update = time.time() # 一括移動後もタイマーリセット
-
 def _move_oni_one_step():
     """鬼をプレイヤーに向かって1マス動かす内部ロジック"""
     px, py = st.session_state.player_pos
@@ -257,20 +252,17 @@ def check_events():
         else: st.session_state.message = "鍵がかかっている...。鍵を探さなければ。"
 
 def automatic_oni_move():
-    """1秒ごとに鬼を動かすリアルタイム処理"""
+    """一定時間ごとに鬼を動かすリアルタイム処理"""
     if st.session_state.game_over or st.session_state.win: return
     
-    # 難易度に応じて自動移動間隔を変更
     interval = 1.0
-    if st.session_state.difficulty == 'やさしい':
-        interval = 1.5
-    elif st.session_state.difficulty == 'むずかしい':
-        interval = 0.8
+    if st.session_state.difficulty == 'やさしい': interval = 1.5
+    elif st.session_state.difficulty == 'むずかしい': interval = 0.8
         
-    if time.time() - st.session_state.last_update > interval:
+    if time.time() - st.session_state.oni_last_move_time > interval:
         move_oni()
         check_events()
-        st.session_state.last_update = time.time()
+        st.session_state.oni_last_move_time = time.time()
 
 def force_game_reset():
     """難易度変更やリスタート時にゲーム状態を強制的にリセットする"""
@@ -282,7 +274,7 @@ def restart_game():
 # --- メインのUI ---
 st.set_page_config(page_title="Streamlit 青鬼")
 initialize_game()
-automatic_oni_move() # 毎実行時に自動更新をチェック
+automatic_oni_move()
 
 # --- サイドバー (設定と情報) ---
 with st.sidebar:
@@ -322,7 +314,7 @@ st.markdown("""
 <style>
 h1 {font-size: 1.5rem;}
 div[data-testid="stAlert"] {
-    min-height: 3.5em; /* 2行分の高さを確保 */
+    min-height: 4em; /* メッセージ欄の高さを固定 */
     display: flex;
     align-items: center;
 }
