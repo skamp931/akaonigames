@@ -1,3 +1,5 @@
 streamlit
 numpy
 oauth2client
+gspread
+pandas
