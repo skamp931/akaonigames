@@ -31,14 +31,13 @@ def get_gspread_client():
         client = gspread.authorize(creds)
         return client
     except Exception:
-        # Secretが設定されていない場合はNoneを返す
         return None
 
 def get_ranking(client):
     """スプレッドシートからランキングデータを取得・表示"""
     try:
-        spreadsheet_name = st.secrets.spreadsheet_name
-        sheet = client.open(spreadsheet_name).sheet1
+        spreadsheet_key = st.secrets.spreadsheet_key
+        sheet = client.open_by_key(spreadsheet_key).sheet1 # キーで開くように変更
         records = sheet.get_all_records()
         if not records:
             return pd.DataFrame(columns=['Name', 'Difficulty', 'ClearCount'])
@@ -55,8 +54,8 @@ def get_ranking(client):
 def save_score(client, name, difficulty, clear_count):
     """スコアをスプレッドシートに保存"""
     try:
-        spreadsheet_name = st.secrets.spreadsheet_name
-        sheet = client.open(spreadsheet_name).sheet1
+        spreadsheet_key = st.secrets.spreadsheet_key
+        sheet = client.open_by_key(spreadsheet_key).sheet1 # キーで開くように変更
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([name, difficulty, clear_count, timestamp])
     except Exception as e:
@@ -359,7 +358,7 @@ div[data-testid="stAlert"] {
 }
 </style>
 """, unsafe_allow_html=True)
-st.title("Streamlit 青鬼風ゲーム")
+st.title("青鬼風ゲーム")
 st.caption("鬼から逃げながら鍵を見つけ、屋敷から脱出せよ！")
 if st.session_state.game_over: st.error(st.session_state.message)
 elif st.session_state.win: st.success(st.session_state.message)
