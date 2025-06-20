@@ -38,7 +38,7 @@ def get_ranking(_client):
     """スプレッドシートからランキングデータを取得・表示"""
     try:
         spreadsheet_key = st.secrets.spreadsheet_key
-        sheet = _client.open_by_key(spreadsheet_key).sheet1 # キーで開くように変更
+        sheet = _client.open_by_key(spreadsheet_key).sheet1
         records = sheet.get_all_records()
         if not records:
             return pd.DataFrame(columns=['Name', 'Difficulty', 'ClearCount'])
@@ -56,15 +56,13 @@ def save_score(client, name, difficulty, clear_count):
     """スコアをスプレッドシートに保存"""
     try:
         spreadsheet_key = st.secrets.spreadsheet_key
-        sheet = client.open_by_key(spreadsheet_key).sheet1 # キーで開くように変更
+        sheet = client.open_by_key(spreadsheet_key).sheet1
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([name, difficulty, clear_count, timestamp])
-        # スコア保存後にキャッシュをクリア
-        st.cache_data.clear()
+        st.cache_data.clear() # スコア保存後にキャッシュをクリア
         st.toast("記録を保存しました！")
     except Exception as e:
         st.sidebar.warning(f"スコア保存エラー: {e}")
-
 
 def is_path_possible(game_map, start_pos, end_pos):
     """BFS (幅優先探索) を使って、スタートからゴールまでの道があるかチェック"""
@@ -137,7 +135,6 @@ def initialize_game():
         if 'clear_count' not in st.session_state: st.session_state.clear_count = 0
         if 'difficulty' not in st.session_state: st.session_state.difficulty = "ふつう"
         if 'player_name' not in st.session_state:
-            # ランダムな名前を生成
             adjectives = ["勇敢な", "素早い", "賢い", "幸運の", "伝説の"]
             nouns = ["挑戦者", "冒険家", "探検家", "勇者", "脱出者"]
             today_str = time.strftime("%m%d")
@@ -156,7 +153,6 @@ def initialize_game():
         st.session_state.game_over = False
         st.session_state.win = False
         st.session_state.message = "屋敷に閉じ込められた...。鍵を見つけて脱出しなければ。"
-        st.session_state.turn_count = 0
         st.session_state.win_counted = False
         st.session_state.game_started = True
         st.session_state.start_time = time.time()
@@ -166,6 +162,9 @@ def initialize_game():
         st.session_state.player_trap_pos = None
         st.session_state.map_trap_pos = None
         st.session_state.oni_stopped_turns = 0
+        st.session_state.oni_freeze_end_time = 0
+        st.session_state.repel_charges = st.session_state.clear_count // 10
+
         if st.session_state.difficulty == "むずかしい":
             st.session_state.trap_count = 1
             possible_trap_positions = []
@@ -252,14 +251,20 @@ def check_oni_trap_interaction():
     if trapped:
         st.session_state.oni_stopped_turns = 3
         st.session_state.message = f"鬼が罠にかかった！ {st.session_state.oni_stopped_turns}ターン動けない。"
+        st.session_state.oni_last_move_time = time.time()
 
 def move_oni():
+    if st.session_state.oni_freeze_end_time > time.time():
+        st.session_state.message = "鬼は鍵の力で動けない！"
+        return
     if st.session_state.oni_stopped_turns > 0:
         st.session_state.oni_stopped_turns -= 1
         if st.session_state.oni_stopped_turns > 0:
             st.session_state.message = f"鬼は罠にはまっている！あと{st.session_state.oni_stopped_turns}ターンは動けない。"
         else: st.session_state.message = "鬼が罠から抜け出した！"
+        st.session_state.oni_last_move_time = time.time() # 停止ターン消費も1秒としてカウント
         return
+
     difficulty = st.session_state.difficulty
     if difficulty == "やさしい" or difficulty == "ふつう":
         _move_oni_one_step()
@@ -271,14 +276,31 @@ def move_oni():
 
 def check_events():
     if st.session_state.player_pos == st.session_state.oni_pos:
+        # Repel Buff Check
+        if st.session_state.repel_charges > 0:
+            st.session_state.repel_charges -= 1
+            st.session_state.message = f"バリアが鬼を弾き飛ばした！(残り: {st.session_state.repel_charges}回)"
+            px, py = st.session_state.player_pos
+            ox, oy = st.session_state.oni_pos
+            dx = (ox - px) * 2 if (ox - px) != 0 else (random.choice([-1,1]) if ox==px else 0)
+            dy = (oy - py) * 2 if (oy - py) != 0 else (random.choice([-1,1]) if oy==py else 0)
+            st.session_state.oni_pos = [min(MAP_WIDTH - 2, max(1, ox + dx)), min(MAP_HEIGHT - 2, max(1, oy + dy))]
+            return
+            
         st.session_state.game_over = True
         st.session_state.message = "鬼に捕まってしまった...。"
         if not st.session_state.end_time: st.session_state.end_time = time.time()
         return
+
     if st.session_state.key_pos and st.session_state.player_pos == st.session_state.key_pos:
         st.session_state.has_key = True; st.session_state.key_pos = None
         st.session_state.message = "鍵を手に入れた！出口を探そう。"
+        # Freeze Buff Check
+        if st.session_state.clear_count >= 20 and random.random() < 0.05: # 条件変更
+            st.session_state.oni_freeze_end_time = time.time() + 10
+            st.session_state.message = "鍵の力で鬼の動きが10秒間止まった！"
         return
+
     if st.session_state.player_pos == st.session_state.exit_pos:
         if st.session_state.has_key:
             st.session_state.win = True
@@ -306,21 +328,7 @@ def force_game_reset():
     st.session_state.pop('game_started', None)
     
 def restart_game():
-    """リスタート時に現在のスコアを保存し、ゲームをリセット"""
-    # スコアが1以上なら保存
-    if st.session_state.get('clear_count', 0) > 0:
-        client = get_gspread_client()
-        if client:
-            save_score(
-                client, 
-                st.session_state.player_name, 
-                st.session_state.difficulty, 
-                st.session_state.clear_count
-            )
-    
-    # ゲームをリセット
-    force_game_reset()
-    st.rerun()
+    force_game_reset(); st.rerun()
 
 # --- メインのUI ---
 st.set_page_config(page_title="Streamlit 青鬼")
@@ -350,6 +358,8 @@ with st.sidebar:
                  disabled=(st.session_state.turn_count > 0), on_change=force_game_reset)
     st.write(f"**クリア回数: {st.session_state.clear_count}**")
     st.write(f"鍵の所持: {'あり' if st.session_state.has_key else 'なし'}")
+    if st.session_state.clear_count >= 10:
+        st.write(f"**鬼よけバリア: {st.session_state.repel_charges}回**")
     if st.session_state.difficulty == "むずかしい":
         st.write(f"**設置可能罠: {st.session_state.trap_count}**")
     st.write("---")
@@ -360,33 +370,30 @@ with st.sidebar:
     with st.expander("ゲームのルール (Q&A)", expanded=False):
         st.markdown("""
         **Q. 目的は？** A. 鬼（👹）に捕まらずに鍵（🔑）を見つけ、出口（🚪）から脱出することです。
-        **Q. 操作方法は？** A. メイン画面下部のボタンか、サイドバーの一括移動を使います。
-        **Q. リアルタイム制とは？** A. あなたが何もしなくても、鬼が自動で動きます。難易度によって速さが変わります。
+        **Q. バフ（特殊能力）について**
+        - **鬼よけバリア**: クリア10回ごとに使用回数が1回増えます。鬼に接触すると自動で発動し、鬼を弾き飛ばします。
+        - **鍵の力**: クリア20回以上の時、鍵を取ると5%の確率で鬼が10秒間停止します。
         """)
-    with st.expander("障害物（🌲）について", expanded=False):
-        st.markdown("**Q. 障害物（🌲）って何？** A. クリアごとに増える壁です。プレイヤーは通れませんが、鬼は通り抜けます。")
     with st.expander("罠（🪤）について", expanded=False):
-        st.markdown("""
-        **Q. 罠（🪤）って何？** A. 鬼を3ターン止められるアイテムです。「むずかしい」モードでのみ使えます。
-        **Q. どうやって使うの？** A. 「🪤」ボタンで現在地に設置できます。「むずかしい」では最初からマップに1つ、自分で置けるのが1つあります。
-        """)
+        st.markdown("**Q. 罠（🪤）って何？** A. 「むずかしい」モード限定。鬼を3ターン止められます。自分で1つ設置でき、マップにも最初から1つあります。")
 
 # --- メイン画面 ---
 st.markdown("""
 <style>
 h1 {font-size: 1.5rem;}
-div[data-testid="stAlert"] {
-    min-height: 4em; /* メッセージ欄の高さを固定 */
-    display: flex;
-    align-items: center;
-}
+div[data-testid="stAlert"] { min-height: 4em; display: flex; align-items: center; }
 </style>
 """, unsafe_allow_html=True)
 st.title("青鬼風ゲーム")
 st.caption("鬼から逃げながら鍵を見つけ、屋敷から脱出せよ！")
-if st.session_state.game_over: st.error(st.session_state.message)
-elif st.session_state.win: st.success(st.session_state.message)
-else: st.info(st.session_state.message)
+if st.session_state.game_over:
+    st.error(st.session_state.message)
+elif st.session_state.win:
+    st.success(st.session_state.message)
+    st.balloons()
+else:
+    st.info(st.session_state.message)
+
 display_map()
 
 # --- 操作ボタン ---
