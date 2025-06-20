@@ -33,11 +33,12 @@ def get_gspread_client():
     except Exception:
         return None
 
-def get_ranking(client):
+@st.cache_data(ttl=60) # 60秒間結果をキャッシュする
+def get_ranking(_client):
     """スプレッドシートからランキングデータを取得・表示"""
     try:
         spreadsheet_key = st.secrets.spreadsheet_key
-        sheet = client.open_by_key(spreadsheet_key).sheet1 # キーで開くように変更
+        sheet = _client.open_by_key(spreadsheet_key).sheet1 # キーで開くように変更
         records = sheet.get_all_records()
         if not records:
             return pd.DataFrame(columns=['Name', 'Difficulty', 'ClearCount'])
@@ -58,6 +59,8 @@ def save_score(client, name, difficulty, clear_count):
         sheet = client.open_by_key(spreadsheet_key).sheet1 # キーで開くように変更
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         sheet.append_row([name, difficulty, clear_count, timestamp])
+        # スコア保存後にキャッシュをクリア
+        st.cache_data.clear()
     except Exception as e:
         st.sidebar.warning(f"スコア保存エラー: {e}")
 
