@@ -146,7 +146,7 @@ def display_map():
     st.code(map_str, language=None)
 
 def move_player(dx, dy):
-    """プレイヤーを1マス移動させ、ゲームのターンを進行させる"""
+    """プレイヤーを1マス移動させる。鬼は動かさない。"""
     if st.session_state.game_over or st.session_state.win: return
     px, py = st.session_state.player_pos
     new_px, new_py = px + dx, py + dy
@@ -154,9 +154,9 @@ def move_player(dx, dy):
         st.session_state.player_pos = [new_px, new_py]
         st.session_state.message = ""
         st.session_state.turn_count += 1
-        move_oni()
+        # move_oni() # REMOVED: 鬼は自動タイマーでのみ動く
         check_events()
-        st.session_state.last_update = time.time() # プレイヤーが動いたのでタイマーリセット
+        st.session_state.last_update = time.time() # プレイヤーが動いたので自動移動タイマーをリセット
 
 def handle_bulk_move(commands):
     """テキストコマンドに基づいてプレイヤーを連続で移動させる"""
@@ -168,7 +168,16 @@ def handle_bulk_move(commands):
         elif command == 'u': dy = -1
         elif command == 'd': dy = 1
         else: continue
-        move_player(dx, dy)
+        
+        px, py = st.session_state.player_pos
+        new_px, new_py = px + dx, py + dy
+        if st.session_state.game_map[new_py][new_px] not in [WALL, OBSTACLE]:
+            st.session_state.player_pos = [new_px, new_py]
+            check_events() # 鬼は動かさずにイベントチェックのみ
+        else:
+            st.session_state.message = "一括移動中に壁にぶつかり停止しました。"
+            break
+            
     st.session_state.last_update = time.time() # 一括移動後もタイマーリセット
 
 def _move_oni_one_step():
@@ -212,9 +221,9 @@ def move_oni():
         return
 
     difficulty = st.session_state.difficulty
+    # リアルタイム制ではターン数は無視
     if difficulty == "やさしい":
-        if st.session_state.turn_count % 2 == 0:
-             _move_oni_one_step(); check_oni_trap_interaction()
+        _move_oni_one_step(); check_oni_trap_interaction()
     elif difficulty == "ふつう":
         _move_oni_one_step(); check_oni_trap_interaction()
     elif difficulty == "むずかしい":
@@ -250,7 +259,15 @@ def check_events():
 def automatic_oni_move():
     """1秒ごとに鬼を動かすリアルタイム処理"""
     if st.session_state.game_over or st.session_state.win: return
-    if time.time() - st.session_state.last_update > 1.0:
+    
+    # 難易度に応じて自動移動間隔を変更
+    interval = 1.0
+    if st.session_state.difficulty == 'やさしい':
+        interval = 1.5
+    elif st.session_state.difficulty == 'むずかしい':
+        interval = 0.8
+        
+    if time.time() - st.session_state.last_update > interval:
         move_oni()
         check_events()
         st.session_state.last_update = time.time()
@@ -290,7 +307,7 @@ with st.sidebar:
         st.markdown("""
         **Q. 目的は？** A. 鬼（👹）に捕まらずに鍵（🔑）を見つけ、出口（🚪）から脱出することです。
         **Q. 操作方法は？** A. メイン画面下部のボタンか、サイドバーの一括移動を使います。
-        **Q. リアルタイム制とは？** A. あなたが何もしなくても、1秒ごとに鬼が自動で動きます。
+        **Q. リアルタイム制とは？** A. あなたが何もしなくても、鬼が自動で動きます。難易度によって速さが変わります。
         """)
     with st.expander("障害物（🌲）について", expanded=False):
         st.markdown("**Q. 障害物（🌲）って何？** A. クリアごとに増える壁です。プレイヤーは通れませんが、鬼は通り抜けます。")
@@ -301,7 +318,16 @@ with st.sidebar:
         """)
 
 # --- メイン画面 ---
-st.markdown("<style>h1{font-size: 1.8rem;}</style>", unsafe_allow_html=True)
+st.markdown("""
+<style>
+h1 {font-size: 1.5rem;}
+div[data-testid="stAlert"] {
+    min-height: 3.5em; /* 2行分の高さを確保 */
+    display: flex;
+    align-items: center;
+}
+</style>
+""", unsafe_allow_html=True)
 st.title("Streamlit 青鬼風ゲーム")
 st.caption("鬼から逃げながら鍵を見つけ、屋敷から脱出せよ！")
 if st.session_state.game_over: st.error(st.session_state.message)
@@ -333,7 +359,7 @@ with cols[4]:
 st.write("") 
 if st.button("リスタート", use_container_width=True): restart_game()
 
-# --- リアルタイム更新用のJavaScriptを注入 ---
+# --- リアルタイム更新 ---
 if not st.session_state.game_over and not st.session_state.win:
-    time.sleep(1)
+    time.sleep(0.1) # CPU負荷を少し下げる
     st.rerun()
