@@ -3,3 +3,5 @@ numpy
 oauth2client
 gspread
 pandas
+japanize-matplotlib
+setuptools
