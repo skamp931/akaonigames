@@ -355,7 +355,7 @@ with st.sidebar:
         st.write(f"**経過時間: {minutes:02d}:{seconds:02d}**")
     st.write("---")
     st.selectbox("難易度", ("やさしい", "ふつう", "むずかしい"), key='difficulty', 
-                 disabled=(st.session_state.turn_count > 0), on_change=force_game_reset)
+                 disabled=(st.session_state.player_pos != INITIAL_PLAYER_POS), on_change=force_game_reset) # エラー修正
     st.write(f"**クリア回数: {st.session_state.clear_count}**")
     st.write(f"鍵の所持: {'あり' if st.session_state.has_key else 'なし'}")
     if st.session_state.clear_count >= 10:
